@@ -74,6 +74,49 @@ export function BookingGrid({ session }: { session: Session }) {
     return map
   }, [bookings])
 
+  const [toast, setToast] = useState<string | null>(null)
+  function showToast(message: string) {
+    setToast(message)
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  // CLAUDE.md rule 4: never check-then-insert. Insert optimistically, and if
+  // Postgres says 23505 (unique violation on slot_start) someone beat us to
+  // it — revert. Any other error is a trigger's raise exception (rule 5);
+  // show its message as-is.
+  async function bookSlot(startMs: number) {
+    const optimisticBooking: BookingRow = {
+      slot_start: new Date(startMs).toISOString(),
+      user_id: session.user.id,
+      profiles: null,
+    }
+    setBookings((prev) => [...prev, optimisticBooking])
+
+    const { error: insertError } = await supabase
+      .from('bookings')
+      .insert({ slot_start: optimisticBooking.slot_start, user_id: session.user.id })
+
+    if (insertError) {
+      setBookings((prev) => prev.filter((b) => b !== optimisticBooking))
+      showToast(insertError.code === '23505' ? 'Just taken by someone else.' : insertError.message)
+    }
+  }
+
+  async function releaseSlot(startMs: number) {
+    const previousBookings = bookings
+    setBookings((prev) => prev.filter((b) => new Date(b.slot_start).getTime() !== startMs))
+
+    const { error: deleteError } = await supabase
+      .from('bookings')
+      .delete()
+      .eq('slot_start', new Date(startMs).toISOString())
+
+    if (deleteError) {
+      setBookings(previousBookings)
+      showToast(deleteError.message)
+    }
+  }
+
   const pillDayIndices = [0, 1, 2, 3].map((offset) => anchorDayIndex + offset)
 
   return (
@@ -123,20 +166,34 @@ export function BookingGrid({ session }: { session: Session }) {
 
               return (
                 <li key={hour}>
-                  <SlotRow hour={hour} state={state} />
+                  <SlotRow
+                    hour={hour}
+                    state={state}
+                    onTap={() => {
+                      if (state.kind === 'FREE') bookSlot(startMs)
+                      else if (state.kind === 'YOURS') releaseSlot(startMs)
+                    }}
+                  />
                 </li>
               )
             })}
           </ul>
         )}
       </div>
+
+      {toast && (
+        <p className="mx-4 mb-4 rounded-lg bg-neutral-800 px-4 py-3 text-center text-sm text-neutral-100">
+          {toast}
+        </p>
+      )}
     </div>
   )
 }
 
-function SlotRow({ hour, state }: { hour: number; state: SlotState }) {
+function SlotRow({ hour, state, onTap }: { hour: number; state: SlotState; onTap: () => void }) {
   const label = formatSlotRange(hour)
   const lateNight = isLateNight(hour)
+  const tappable = state.kind === 'FREE' || state.kind === 'YOURS'
 
   const stateStyles: Record<SlotState['kind'], string> = {
     FREE: 'bg-neutral-900 border border-neutral-700',
@@ -146,8 +203,11 @@ function SlotRow({ hour, state }: { hour: number; state: SlotState }) {
   }
 
   return (
-    <div
-      className={`flex items-center justify-between rounded-xl px-4 py-4 ${stateStyles[state.kind]}`}
+    <button
+      type="button"
+      disabled={!tappable}
+      onClick={onTap}
+      className={`flex w-full items-center justify-between rounded-xl px-4 py-4 text-left ${stateStyles[state.kind]}`}
     >
       <div>
         <p className={`text-base font-medium ${state.kind === 'PAST' ? 'text-neutral-500' : 'text-neutral-100'}`}>
@@ -159,11 +219,11 @@ function SlotRow({ hour, state }: { hour: number; state: SlotState }) {
             {state.name} · Room {state.room}
           </p>
         )}
-        {state.kind === 'YOURS' && <p className="text-sm text-emerald-300">Yours</p>}
+        {state.kind === 'YOURS' && <p className="text-sm text-emerald-300">Tap to release</p>}
       </div>
 
       {state.kind === 'FREE' && <span className="text-sm text-neutral-500">Tap to book</span>}
       {state.kind === 'TAKEN' && <span className="text-lg">🔔</span>}
-    </div>
+    </button>
   )
 }
