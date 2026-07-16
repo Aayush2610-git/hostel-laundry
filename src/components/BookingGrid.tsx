@@ -46,24 +46,49 @@ export function BookingGrid({ session }: { session: Session }) {
 
     const isoStarts = slotStarts.map((ms) => new Date(ms).toISOString())
 
-    supabase
-      .from('bookings')
-      .select('slot_start, user_id, profiles(full_name, room_no)')
-      .in('slot_start', isoStarts)
-      .then(({ data, error: fetchError }) => {
-        if (cancelled) return
-        if (fetchError) {
-          setError(fetchError.message)
-        } else {
-          setBookings((data ?? []) as unknown as BookingRow[])
-        }
-        setLoading(false)
-      })
+    function loadBookings() {
+      return supabase
+        .from('bookings')
+        .select('slot_start, user_id, profiles(full_name, room_no)')
+        .in('slot_start', isoStarts)
+        .then(({ data, error: fetchError }) => {
+          if (cancelled) return
+          if (fetchError) {
+            setError(fetchError.message)
+          } else {
+            setBookings((data ?? []) as unknown as BookingRow[])
+          }
+          setLoading(false)
+        })
+    }
+
+    loadBookings()
+
+    // Realtime: someone else's booking/release should show up without a
+    // refresh. postgres_changes filters only support one `column=eq.value`
+    // condition, not the range we need for a laundry day, so we listen to
+    // every change on the table and just re-run the same query above when a
+    // change touches one of the slots currently on screen — that keeps this
+    // in sync with the DB (rule 5: business logic, and therefore the truth
+    // about a slot, lives server-side) instead of us hand-merging payloads.
+    const channel = supabase
+      .channel(`bookings-day-${selectedDayIndex}`)
+      .on<{ slot_start: string }>(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bookings' },
+        (payload) => {
+          const row = payload.new ?? payload.old
+          if (!row?.slot_start) return
+          if (slotStarts.includes(new Date(row.slot_start).getTime())) loadBookings()
+        },
+      )
+      .subscribe()
 
     return () => {
       cancelled = true
+      supabase.removeChannel(channel)
     }
-  }, [slotStarts])
+  }, [slotStarts, selectedDayIndex])
 
   // Keyed by epoch ms, not the raw string: PostgREST returns timestamptz as
   // "2026-07-17T13:30:00+00:00" while we build "2026-07-17T13:30:00.000Z" —
