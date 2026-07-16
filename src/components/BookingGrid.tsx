@@ -65,9 +65,12 @@ export function BookingGrid({ session }: { session: Session }) {
     }
   }, [slotStarts])
 
-  const bookingByIso = useMemo(() => {
-    const map = new Map<string, BookingRow>()
-    for (const booking of bookings) map.set(booking.slot_start, booking)
+  // Keyed by epoch ms, not the raw string: PostgREST returns timestamptz as
+  // "2026-07-17T13:30:00+00:00" while we build "2026-07-17T13:30:00.000Z" —
+  // same instant, different string, so a string-keyed map silently misses.
+  const bookingByStartMs = useMemo(() => {
+    const map = new Map<number, BookingRow>()
+    for (const booking of bookings) map.set(new Date(booking.slot_start).getTime(), booking)
     return map
   }, [bookings])
 
@@ -99,12 +102,11 @@ export function BookingGrid({ session }: { session: Session }) {
 
         {loading ? (
           <p className="py-8 text-center text-neutral-500">Loading slots…</p>
-        ) : (
+        ) : error ? null : (
           <ul className="flex flex-col gap-2">
             {SLOT_HOURS.map((hour, i) => {
               const startMs = slotStarts[i]
-              const iso = new Date(startMs).toISOString()
-              const booking = bookingByIso.get(iso)
+              const booking = bookingByStartMs.get(startMs)
               const isPast = startMs + 2 * 60 * 60 * 1000 <= Date.now()
 
               const state: SlotState = isPast
