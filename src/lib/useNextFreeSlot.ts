@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase } from './supabase'
 import { useMyUpcomingBookings } from './useMyUpcomingBookings'
 import {
+  BOOKING_SPACING_DAYS,
   SLOT_TIMES,
   currentAnchorDayIndex,
   istHourOf,
@@ -14,8 +15,9 @@ export type NextFreeSlot = { startMs: number; hour: number; minute: number; dayI
 
 // Powers the sticky bottom bar (and HomeScreen's auto-jump-to-it on load):
 // the earliest free slot across the same 4-day window the day pills
-// expose, skipping any day the user already has a booking on (the trigger
-// would reject a second one there anyway).
+// expose, skipping any day within BOOKING_SPACING_DAYS of one the user
+// already has a booking on (the trigger would reject a second one there
+// anyway — see enforce_booking_limits, schema.sql section 6).
 export function useNextFreeSlot(session: Session): { next: NextFreeSlot | null; loading: boolean } {
   const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
   const { bookings: myUpcomingBookings } = useMyUpcomingBookings(session)
@@ -30,10 +32,13 @@ export function useNextFreeSlot(session: Session): { next: NextFreeSlot | null; 
   }, [myUpcomingBookings])
 
   const candidates = useMemo(() => {
+    const conflictsWithBooking = (dayIndex: number) =>
+      [...myBookedDayIndices].some((bookedDay) => Math.abs(bookedDay - dayIndex) < BOOKING_SPACING_DAYS)
+
     const list: NextFreeSlot[] = []
     for (let offset = 0; offset < 4; offset++) {
       const dayIndex = anchorDayIndex + offset
-      if (myBookedDayIndices.has(dayIndex)) continue
+      if (conflictsWithBooking(dayIndex)) continue
       for (const { hour, minute } of SLOT_TIMES) {
         const startMs = slotStartUtcMs(dayIndex, hour, minute)
         if (startMs > Date.now()) list.push({ startMs, hour, minute, dayIndex })

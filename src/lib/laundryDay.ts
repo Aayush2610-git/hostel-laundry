@@ -28,6 +28,12 @@ export type SlotTime = (typeof SLOT_TIMES)[number]
 
 export const SLOT_DURATION_MS = 2.5 * HOUR_MS
 
+// Mirrors booking_spacing_days() in schema.sql section 6 — the DB trigger
+// is what actually enforces this; this is just the client-side copy so
+// the UI can pre-check and show a toast before hitting the server, same
+// pattern as RELEASE_CUTOFF_MS mirroring enforce_release_cutoff.
+export const BOOKING_SPACING_DAYS = 3
+
 export function isLateNight(hour: number): boolean {
   return hour === 22 || hour === 0
 }

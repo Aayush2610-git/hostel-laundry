@@ -3,7 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { useMyActiveOffer } from '../lib/useMyActiveOffer'
 import { useMyUpcomingBookings } from '../lib/useMyUpcomingBookings'
-import { formatSlotStart, istHourOf, istMinuteOf, laundryDayIndexOfSlotStart } from '../lib/laundryDay'
+import { BOOKING_SPACING_DAYS, formatSlotStart, istHourOf, istMinuteOf, laundryDayIndexOfSlotStart } from '../lib/laundryDay'
 
 // MM:SS, same shape as StatusHero's countdown — duplicated rather than
 // shared since it's 4 lines and the two components have nothing else in
@@ -49,8 +49,9 @@ export function OfferCard({ session }: { session: Session }) {
     setError(null)
   }, [offer?.slot_start])
 
-  // "At my cap" is scoped to the offered slot's own laundry day (the cap in
-  // enforce_booking_limits is per-day, not global — schema.sql section 6),
+  // "At my cap" means a booking within BOOKING_SPACING_DAYS of the offered
+  // slot's own laundry day, not just an exact-day match (enforce_booking_
+  // limits is spacing-based, not per-exact-day — schema.sql section 6),
   // and excludes anything already started: mid-wash isn't a fallback to
   // give up anymore.
   const releaseCandidates = useMemo(() => {
@@ -59,7 +60,8 @@ export function OfferCard({ session }: { session: Session }) {
     return myUpcomingBookings.filter((b) => {
       if (b.started_at) return false
       const bMs = new Date(b.slot_start).getTime()
-      return laundryDayIndexOfSlotStart(bMs, istHourOf(bMs)) === targetDay
+      const bDay = laundryDayIndexOfSlotStart(bMs, istHourOf(bMs))
+      return Math.abs(bDay - targetDay) < BOOKING_SPACING_DAYS
     })
   }, [myUpcomingBookings, startMs])
 

@@ -76,22 +76,24 @@ alter table bookings add constraint slot_aligned check (
 );
 
 -- 6. Business rules (server-side; messages are user-facing) ----
--- daily_booking_limit() is the single source of truth for the per-day cap.
--- The trigger reads it below instead of hardcoding the number — see
--- CLAUDE.md rule "database is the source of truth", never hardcode this.
--- (Replaces the old booking_limit(), which capped total upcoming bookings
--- regardless of day; the rule is now "1 booking per laundry day", using
--- public.laundry_day() from section 3 to group by day, not calendar date.)
-create or replace function public.daily_booking_limit()
+-- booking_spacing_days() is the single source of truth for the cap. The
+-- trigger reads it below instead of hardcoding the number — never
+-- hardcode this. (Replaces daily_booking_limit(), which was "1 per exact
+-- laundry day" — same-day duplicates only, so Monday + Tuesday was fine.
+-- The rule is now spacing-based: any two of a resident's upcoming
+-- bookings must be at least this many laundry-days apart. laundry_day()
+-- returns a `date`, so subtracting two of them is plain integer day-count
+-- arithmetic — no interval math needed.)
+create or replace function public.booking_spacing_days()
 returns int language sql immutable as $$
-  select 1;
+  select 3;
 $$;
 
-grant execute on function public.daily_booking_limit() to authenticated;
+grant execute on function public.booking_spacing_days() to authenticated;
 
 create or replace function public.enforce_booking_limits()
 returns trigger language plpgsql as $$
-declare cnt int;
+declare conflict_day date;
 begin
   if new.slot_start < now() then
     raise exception 'Cannot book a slot in the past';
@@ -99,20 +101,26 @@ begin
   if new.slot_start > now() + interval '4 days' then
     raise exception 'You can only book up to 4 days ahead';
   end if;
-  select count(*) into cnt from bookings
+
+  select public.laundry_day(slot_start) into conflict_day
+    from bookings
    where user_id = new.user_id
      and slot_start > now()
-     and public.laundry_day(slot_start) = public.laundry_day(new.slot_start);
-  if cnt >= public.daily_booking_limit() then
-    raise exception 'Only % booking per day — release your existing one on this day first', public.daily_booking_limit();
+     and abs(public.laundry_day(slot_start) - public.laundry_day(new.slot_start)) < public.booking_spacing_days()
+   limit 1;
+
+  if conflict_day is not null then
+    raise exception 'Bookings must be at least % days apart — you already have one on %',
+      public.booking_spacing_days(), conflict_day;
   end if;
+
   return new;
 end $$;
 
 create trigger booking_limits before insert on bookings
 for each row execute function public.enforce_booking_limits();
 
-drop function if exists public.booking_limit();
+drop function if exists public.daily_booking_limit();
 
 -- 7. Watchers -------------------------------------------------
 create table slot_watchers (

@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { useMyUpcomingBookings } from '../lib/useMyUpcomingBookings'
 import { useMyWatchedSlots } from '../lib/useMyWatchedSlots'
 import {
+  BOOKING_SPACING_DAYS,
   SLOT_TIMES,
   currentAnchorDayIndex,
   formatFullDate,
@@ -77,10 +78,11 @@ export function BookingGrid({
   const [error, setError] = useState<string | null>(null)
   const { watched, refetch: refetchWatched } = useMyWatchedSlots(session)
 
-  // The cap is "max 1 booking per laundry day" (enforced in the
-  // enforce_booking_limits trigger in schema.sql), not a global count, so
-  // we check it per day: does the currently selected day already have one
-  // of this user's upcoming bookings on it?
+  // The cap is spacing-based (enforce_booking_limits in schema.sql,
+  // section 6): any two upcoming bookings must be at least
+  // BOOKING_SPACING_DAYS laundry-days apart, not just "not the exact same
+  // day." So the selected day is blocked if it's within that spacing of
+  // ANY of this user's upcoming booked days, not just an exact match.
   const { bookings: myUpcomingBookings } = useMyUpcomingBookings(session)
   const myBookedDayIndices = useMemo(() => {
     const set = new Set<number>()
@@ -90,7 +92,13 @@ export function BookingGrid({
     }
     return set
   }, [myUpcomingBookings])
-  const dayAtCap = myBookedDayIndices.has(selectedDayIndex)
+  const conflictingBookedDayIndex = useMemo(() => {
+    for (const bookedDay of myBookedDayIndices) {
+      if (Math.abs(bookedDay - selectedDayIndex) < BOOKING_SPACING_DAYS) return bookedDay
+    }
+    return null
+  }, [myBookedDayIndices, selectedDayIndex])
+  const dayAtCap = conflictingBookedDayIndex !== null
 
   // useMyUpcomingBookings has its own realtime subscription that's proven
   // reliable (YourSlotsCard depends on it correctly reflecting a release).
@@ -437,9 +445,9 @@ export function BookingGrid({
                         // Only surfaced reactively, on the tap that's actually
                         // blocked by it — not as a standing banner the moment
                         // you happen to already have a booking that day.
-                        if (dayAtCap) {
+                        if (dayAtCap && conflictingBookedDayIndex !== null) {
                           showToast(
-                            `You already have a booking on ${formatPillLabel(selectedDayIndex, anchorDayIndex)} — release it to book another.`,
+                            `You have a booking on ${formatPillLabel(conflictingBookedDayIndex, anchorDayIndex)} — bookings must be at least ${BOOKING_SPACING_DAYS} days apart.`,
                           )
                         } else {
                           bookSlot(startMs)
