@@ -75,9 +75,32 @@ body {
   animation: pop-in 220ms ease-out;
 }
 
+/* NextFreeSlotBar's "go to slot" shortcut jumps the grid to the right day
+   and scrolls this into view — the fading ring is what actually draws the
+   eye to which row that was, since scrolling alone is easy to miss. Fades
+   to nothing on its own; the row's normal FREE/TAKEN/etc. styling is what
+   remains after. */
+@keyframes highlight-fade {
+  0% {
+    box-shadow: 0 0 0 3px var(--color-accent), 0 0 24px -2px var(--color-accent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent, 0 0 0 transparent;
+  }
+}
+
+.slot-highlight {
+  animation: highlight-fade 2.2s ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pop-in {
     animation: none;
+  }
+
+  .slot-highlight {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--color-accent);
   }
 
   /* Tailwind's built-in animate-pulse (the "live" status dot) — same

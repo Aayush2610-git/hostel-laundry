@@ -1,7 +1,9 @@
+import { useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { useMyProfile } from '../lib/useMyProfile'
-import { BookingGrid } from './BookingGrid'
+import { currentAnchorDayIndex } from '../lib/laundryDay'
+import { BookingGrid, type SlotHighlight } from './BookingGrid'
 import { NextFreeSlotBar } from './NextFreeSlotBar'
 import { OfferCard } from './OfferCard'
 import { StatusHero } from './StatusHero'
@@ -9,6 +11,19 @@ import { YourSlotsCard } from './YourSlotsCard'
 
 export function HomeScreen({ session, onOpenAdmin }: { session: Session; onOpenAdmin: () => void }) {
   const profile = useMyProfile(session)
+
+  // Lifted out of BookingGrid so NextFreeSlotBar's shortcut can switch the
+  // grid to the right day and point it at a slot — see BookingGrid's
+  // highlight effect and NextFreeSlotBar's own comment for why this isn't
+  // just a direct booking action anymore.
+  const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
+  const [selectedDayIndex, setSelectedDayIndex] = useState(anchorDayIndex)
+  const [highlight, setHighlight] = useState<SlotHighlight>(null)
+
+  function goToSlot(dayIndex: number, startMs: number) {
+    setSelectedDayIndex(dayIndex)
+    setHighlight({ startMs })
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -38,8 +53,13 @@ export function HomeScreen({ session, onOpenAdmin }: { session: Session; onOpenA
       <OfferCard session={session} />
       <StatusHero session={session} />
       <YourSlotsCard session={session} />
-      <BookingGrid session={session} />
-      <NextFreeSlotBar session={session} />
+      <BookingGrid
+        session={session}
+        selectedDayIndex={selectedDayIndex}
+        onSelectDayIndex={setSelectedDayIndex}
+        highlight={highlight}
+      />
+      <NextFreeSlotBar session={session} onNavigate={goToSlot} />
     </div>
   )
 }

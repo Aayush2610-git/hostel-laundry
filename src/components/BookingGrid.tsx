@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { useMyUpcomingBookings } from '../lib/useMyUpcomingBookings'
@@ -51,11 +51,26 @@ function ordinal(n: number): string {
   return `${n}${suffixes[(v - 20) % 10] ?? suffixes[v] ?? suffixes[0]}`
 }
 
-export function BookingGrid({ session }: { session: Session }) {
+// A fresh object every time HomeScreen's goToSlot runs, even for the same
+// startMs twice in a row — object identity (not just the value) is what
+// the scroll+glow effect below keys off of, so a repeat tap on
+// NextFreeSlotBar still re-triggers it.
+export type SlotHighlight = { startMs: number } | null
+
+export function BookingGrid({
+  session,
+  selectedDayIndex,
+  onSelectDayIndex,
+  highlight,
+}: {
+  session: Session
+  selectedDayIndex: number
+  onSelectDayIndex: (dayIndex: number) => void
+  highlight: SlotHighlight
+}) {
   // Computed once on mount — this is a slot-booking app, not a clock, so we
   // don't need to notice a midnight rollover while the page sits open.
   const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
-  const [selectedDayIndex, setSelectedDayIndex] = useState(anchorDayIndex)
   const [bookings, setBookings] = useState<BookingRow[]>([])
   const [offers, setOffers] = useState<OfferRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -301,6 +316,28 @@ export function BookingGrid({ session }: { session: Session }) {
     }
   }
 
+  // NextFreeSlotBar's shortcut sets highlight (and possibly switches
+  // selectedDayIndex) instead of booking directly — this is what actually
+  // draws the eye to the row afterward: scroll it into view and give it a
+  // few seconds of glow. Keyed on `highlight` (object identity, not just
+  // startMs) so a repeat tap on the same slot re-triggers it, and gated on
+  // `!loading` + slotStarts including the target — a day switch means this
+  // has to wait for that day's own fetch to land before the row exists to
+  // scroll to.
+  const rowRefs = useRef(new Map<number, HTMLLIElement>())
+  const [pulsingStartMs, setPulsingStartMs] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!highlight || loading || !slotStarts.includes(highlight.startMs)) return
+    const el = rowRefs.current.get(highlight.startMs)
+    if (!el) return
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setPulsingStartMs(highlight.startMs)
+    const timer = setTimeout(() => setPulsingStartMs(null), 2500)
+    return () => clearTimeout(timer)
+  }, [highlight, loading, slotStarts])
+
   const pillDayIndices = [0, 1, 2, 3].map((offset) => anchorDayIndex + offset)
 
   return (
@@ -317,7 +354,7 @@ export function BookingGrid({ session }: { session: Session }) {
           <button
             key={dayIndex}
             type="button"
-            onClick={() => setSelectedDayIndex(dayIndex)}
+            onClick={() => onSelectDayIndex(dayIndex)}
             className={`shrink-0 rounded-pill px-4 py-2 text-sm font-medium transition-all duration-200 active:scale-[0.96] ${
               dayIndex === selectedDayIndex ? 'bg-accent text-text-primary' : 'bg-surface text-text-secondary'
             }`}
@@ -368,9 +405,14 @@ export function BookingGrid({ session }: { session: Session }) {
 
               const rowKey = `${hour}-${minute}`
 
+              const setRowRef = (el: HTMLLIElement | null) => {
+                if (el) rowRefs.current.set(startMs, el)
+                else rowRefs.current.delete(startMs)
+              }
+
               if (state.kind === 'YOURS' && pendingRelease?.startMs === startMs) {
                 return (
-                  <li key={rowKey}>
+                  <li key={rowKey} ref={setRowRef}>
                     <ReleaseConfirmRow
                       hour={hour}
                       minute={minute}
@@ -383,11 +425,12 @@ export function BookingGrid({ session }: { session: Session }) {
               }
 
               return (
-                <li key={rowKey}>
+                <li key={rowKey} ref={setRowRef}>
                   <SlotRow
                     hour={hour}
                     minute={minute}
                     state={state}
+                    highlighted={startMs === pulsingStartMs}
                     onTap={() => {
                       if (state.kind === 'FREE') {
                         // Only surfaced reactively, on the tap that's actually
@@ -434,11 +477,13 @@ function SlotRow({
   hour,
   minute,
   state,
+  highlighted,
   onTap,
 }: {
   hour: number
   minute: number
   state: SlotState
+  highlighted: boolean
   onTap: () => void
 }) {
   const label = formatSlotRange(hour, minute)
@@ -461,7 +506,7 @@ function SlotRow({
       type="button"
       disabled={!tappable}
       onClick={onTap}
-      className={`flex w-full items-center justify-between rounded-card px-4 py-3.5 text-left transition-all duration-200 ${tappable ? 'active:scale-[0.98]' : ''} ${stateStyles[state.kind]}`}
+      className={`flex w-full items-center justify-between rounded-card px-4 py-3.5 text-left transition-all duration-200 ${tappable ? 'active:scale-[0.98]' : ''} ${stateStyles[state.kind]} ${highlighted ? 'slot-highlight' : ''}`}
     >
       <div>
         <p className={`text-base font-medium ${state.kind === 'PAST' ? 'text-text-secondary' : 'text-text-primary'}`}>

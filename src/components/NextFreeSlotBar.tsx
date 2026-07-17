@@ -1,38 +1,25 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { supabase } from '../lib/supabase'
 import { useNextFreeSlot } from '../lib/useNextFreeSlot'
 import { currentAnchorDayIndex, formatPillLabel, formatSlotRange } from '../lib/laundryDay'
 
-// Glass sticky bar: always-visible shortcut to the earliest free slot,
-// so booking doesn't require scrolling to find one. Hidden entirely once
-// there's no room left to book (every visible day already has a booking,
-// or every remaining slot is taken) — CLAUDE.md rule 7: still one tap.
-export function NextFreeSlotBar({ session }: { session: Session }) {
+// Glass sticky bar: always-visible shortcut to the earliest free slot, so
+// finding one doesn't require scrolling the grid. It used to book that
+// slot directly on tap — residents kept mis-tapping it by accident (it's
+// fixed at the bottom of the screen, easy to catch mid-scroll), so now it
+// only jumps the grid to that slot and highlights it; the actual one-tap
+// book still happens on the row itself (CLAUDE.md rule 7). Hidden entirely
+// once there's no room left to book (every visible day already has a
+// booking, or every remaining slot is taken).
+export function NextFreeSlotBar({
+  session,
+  onNavigate,
+}: {
+  session: Session
+  onNavigate: (dayIndex: number, startMs: number) => void
+}) {
   const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
   const next = useNextFreeSlot(session)
-  const [booking, setBooking] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
-
-  function showToast(message: string) {
-    setToast(message)
-    setTimeout(() => setToast(null), 3000)
-  }
-
-  async function bookNext() {
-    if (!next) return
-    setBooking(true)
-    const { error } = await supabase
-      .from('bookings')
-      .insert({ slot_start: new Date(next.startMs).toISOString(), user_id: session.user.id })
-    setBooking(false)
-    if (error) {
-      showToast(error.code === '23505' ? 'Just taken by someone else.' : error.message)
-    }
-    // On success `next` recomputes itself: myUpcomingBookings picks up the
-    // new booking via realtime, which removes this day from the candidate
-    // window — no local state to reconcile here.
-  }
 
   if (!next) return null
 
@@ -47,14 +34,12 @@ export function NextFreeSlotBar({ session }: { session: Session }) {
         </div>
         <button
           type="button"
-          onClick={bookNext}
-          disabled={booking}
-          className="shrink-0 rounded-pill bg-accent px-5 py-2.5 text-sm font-semibold text-text-primary transition-transform active:scale-[0.96] disabled:opacity-60"
+          onClick={() => onNavigate(next.dayIndex, next.startMs)}
+          className="shrink-0 rounded-pill border border-accent px-5 py-2.5 text-sm font-semibold text-accent transition-transform active:scale-[0.96]"
         >
-          {booking ? 'Booking…' : 'Book'}
+          Go to slot
         </button>
       </div>
-      {toast && <p className="pop-in mt-2 text-center text-sm text-text-secondary">{toast}</p>}
     </div>
   )
 }

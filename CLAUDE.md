@@ -53,7 +53,10 @@ code over clever code. Don't add libraries without saying why.
    2 seconds. Release is the exception: it's irreversible (the slot goes
    straight back to FREE for anyone to take), so it gets an inline confirm
    ("Release your 7:00 PM slot?" / Release / Cancel) — never a modal, just the
-   row itself changing in place.
+   row itself changing in place. This still means one-tap booking happens on
+   the grid row itself, though — NextFreeSlotBar's shortcut jumps to and
+   highlights the slot rather than booking it directly, because a fixed
+   bottom-of-screen "Book" button turned out to get mis-tapped by accident.
 
 ## Schema
 The authoritative schema is in supabase/schema.sql. READ IT before writing
