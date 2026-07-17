@@ -1,1 +1,88 @@
 @import "tailwindcss";
+
+/* Design tokens — one place to change colour, radius, and type scale for
+   the whole app. Tailwind v4's @theme turns each of these into both a real
+   CSS custom property (usable in plain CSS below) and a matching utility
+   class (bg-surface, text-text-primary, rounded-card, etc). Nothing outside
+   this block should hardcode a colour, radius, or font size. */
+@theme {
+  --color-bg: #05070c;
+  --color-surface: #10141d;
+  --color-surface-elevated: #171d2a;
+  --color-border: #262e3d;
+  --color-accent: #2563eb;
+  --color-accent-soft: #16213a;
+  --color-text-primary: #f5f7fb;
+  --color-text-secondary: #8b93a7;
+  --color-danger: #f0584d;
+  --color-danger-soft: #2a1a1a;
+
+  --radius-card: 16px;
+  --radius-pill: 999px;
+
+  --font-size-eyebrow: 0.6875rem;
+  --font-size-heading: 1.25rem;
+  --font-size-hero: 2.75rem;
+
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+/* Status hero drum: spins only while a booking is running, reversing
+   direction every 3s like a real washer agitating (alternate direction on
+   the same keyframe does the reversal for free — no JS timer needed). */
+@keyframes drum-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(200deg);
+  }
+}
+
+.drum-spin {
+  animation: drum-spin 3s ease-in-out infinite alternate;
+}
+
+/* The progress ring's sweep is a discrete SVG attribute update driven by a
+   1s clock tick, not a CSS animation, so it's unaffected by this and stays
+   put per the "keep the ring" requirement. Only the drum rotation freezes. */
+@media (prefers-reduced-motion: reduce) {
+  .drum-spin {
+    animation: none;
+  }
+}
+
+/* Entrance for rows/toasts that newly appear — a new booking, a release
+   confirm swapping in, a toast landing. React gives each a fresh DOM node
+   (keyed by slot or message), so this replays every time one shows up. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.pop-in {
+  animation: pop-in 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-in {
+    animation: none;
+  }
+
+  /* Tailwind's built-in animate-pulse (the "live" status dot) — same
+     reduced-motion treatment as the drum, just extended to this utility. */
+  .animate-pulse {
+    animation: none;
+  }
+}

@@ -17,10 +17,17 @@ export function AuthScreen() {
 
     setLoading(false)
     if (error) {
-      // CLAUDE.md rule 5: the resident-allowlist check lives in a Postgres
-      // trigger, and its raise-exception message is meant to be read by
-      // humans — show it exactly as-is, no rewording.
-      setError(error.message)
+      // The resident-allowlist check lives in a Postgres trigger on
+      // auth.users (handle_new_user). Its raise-exception DOES reach the
+      // HTTP response cleanly (verified: 500 with body
+      // {"code":"P0001","message":"This email is not on the resident
+      // list."}) — but supabase-js mangles that into an unreadable
+      // error.message ("{}") when parsing a 500-status auth error, unlike
+      // PostgREST's clean passthrough for table operations (rule 5). Not
+      // worth working around supabase-js's parsing here — show a fixed,
+      // controlled message instead.
+      console.error('signInWithOtp failed:', error)
+      setError('This email isn’t on the resident list. Contact your hostel admin to get access.')
       return
     }
     setStep('code')
@@ -46,7 +53,7 @@ export function AuthScreen() {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-neutral-950 px-6 text-neutral-100">
+    <div className="flex flex-1 items-center justify-center px-6">
       <div className="w-full max-w-sm">
         <h1 className="mb-8 text-center text-2xl font-semibold">Hostel Laundry</h1>
 
@@ -61,12 +68,12 @@ export function AuthScreen() {
               placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-lg placeholder:text-neutral-600 focus:border-neutral-400 focus:outline-none"
+              className="rounded-card border border-border bg-surface px-4 py-3 text-lg placeholder:text-text-secondary focus:border-accent focus:outline-none"
             />
             <button
               type="submit"
               disabled={loading}
-              className="rounded-xl bg-neutral-100 px-4 py-3 text-lg font-medium text-neutral-950 active:bg-neutral-300 disabled:opacity-50"
+              className="rounded-card bg-accent px-4 py-3 text-lg font-medium text-text-primary active:opacity-80 disabled:opacity-50"
             >
               {loading ? 'Sending code…' : 'Send code'}
             </button>
@@ -75,7 +82,7 @@ export function AuthScreen() {
 
         {step === 'code' && (
           <form onSubmit={handleCodeSubmit} className="flex flex-col gap-4">
-            <p className="text-center text-sm text-neutral-400">
+            <p className="text-center text-sm text-text-secondary">
               Code sent to {email}
             </p>
             <input
@@ -89,12 +96,12 @@ export function AuthScreen() {
               placeholder="6-digit code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              className="rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-center text-lg tracking-[0.5em] placeholder:tracking-normal placeholder:text-neutral-600 focus:border-neutral-400 focus:outline-none"
+              className="rounded-card border border-border bg-surface px-4 py-3 text-center text-lg tracking-[0.5em] placeholder:tracking-normal placeholder:text-text-secondary focus:border-accent focus:outline-none"
             />
             <button
               type="submit"
               disabled={loading}
-              className="rounded-xl bg-neutral-100 px-4 py-3 text-lg font-medium text-neutral-950 active:bg-neutral-300 disabled:opacity-50"
+              className="rounded-card bg-accent px-4 py-3 text-lg font-medium text-text-primary active:opacity-80 disabled:opacity-50"
             >
               {loading ? 'Verifying…' : 'Verify'}
             </button>
@@ -105,7 +112,7 @@ export function AuthScreen() {
                 setCode('')
                 setError(null)
               }}
-              className="text-sm text-neutral-500 active:text-neutral-300"
+              className="text-sm text-text-secondary active:opacity-70"
             >
               Use a different email
             </button>
@@ -113,7 +120,7 @@ export function AuthScreen() {
         )}
 
         {error && (
-          <p className="mt-4 rounded-lg bg-red-950 px-4 py-3 text-sm text-red-300">
+          <p className="mt-4 rounded-card bg-danger-soft px-4 py-3 text-sm text-danger">
             {error}
           </p>
         )}

@@ -63,15 +63,32 @@ alter table bookings
   add constraint bookings_user_id_profiles_fkey
   foreign key (user_id) references profiles(id) on delete cascade;
 
--- 5. Slot grid: 07,09,11,13,15,17,19,21,23,01 IST -------------
+-- 5. Slot grid: eight 2.5h slots, back-to-back, 07:00 -> 03:00 IST --------
+-- (hour, minute) pairs in IST: 7:00, 9:30, 12:00, 14:30, 17:00, 19:30,
+-- 22:00, 00:30. A row check (not a plain hour-in-list) because two
+-- different minute values are now valid depending on which hour it is.
 alter table bookings add constraint slot_aligned check (
-  extract(minute from slot_start at time zone 'Asia/Kolkata') = 0
-  and extract(second from slot_start at time zone 'Asia/Kolkata') = 0
-  and extract(hour from slot_start at time zone 'Asia/Kolkata')::int
-      in (7,9,11,13,15,17,19,21,23,1)
+  extract(second from slot_start at time zone 'Asia/Kolkata') = 0
+  and (
+    extract(hour from slot_start at time zone 'Asia/Kolkata')::int,
+    extract(minute from slot_start at time zone 'Asia/Kolkata')::int
+  ) in ((7,0),(9,30),(12,0),(14,30),(17,0),(19,30),(22,0),(0,30))
 );
 
 -- 6. Business rules (server-side; messages are user-facing) ----
+-- daily_booking_limit() is the single source of truth for the per-day cap.
+-- The trigger reads it below instead of hardcoding the number — see
+-- CLAUDE.md rule "database is the source of truth", never hardcode this.
+-- (Replaces the old booking_limit(), which capped total upcoming bookings
+-- regardless of day; the rule is now "1 booking per laundry day", using
+-- public.laundry_day() from section 3 to group by day, not calendar date.)
+create or replace function public.daily_booking_limit()
+returns int language sql immutable as $$
+  select 1;
+$$;
+
+grant execute on function public.daily_booking_limit() to authenticated;
+
 create or replace function public.enforce_booking_limits()
 returns trigger language plpgsql as $$
 declare cnt int;
@@ -83,15 +100,19 @@ begin
     raise exception 'You can only book up to 4 days ahead';
   end if;
   select count(*) into cnt from bookings
-   where user_id = new.user_id and slot_start > now();
-  if cnt >= 2 then
-    raise exception 'Limit reached: max 2 upcoming bookings';
+   where user_id = new.user_id
+     and slot_start > now()
+     and public.laundry_day(slot_start) = public.laundry_day(new.slot_start);
+  if cnt >= public.daily_booking_limit() then
+    raise exception 'Only % booking per day — release your existing one on this day first', public.daily_booking_limit();
   end if;
   return new;
 end $$;
 
 create trigger booking_limits before insert on bookings
 for each row execute function public.enforce_booking_limits();
+
+drop function if exists public.booking_limit();
 
 -- 7. Watchers -------------------------------------------------
 create table slot_watchers (
@@ -121,6 +142,12 @@ create policy "own watchers" on slot_watchers for all to authenticated
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- 9. Realtime: pushes booking changes to connected clients -----
+-- REPLICA IDENTITY FULL matters here: by default Postgres only includes
+-- the primary key in a DELETE's old-row data, so a client-side realtime
+-- filter like `user_id=eq.<uid>` (or reading payload.old.slot_start) can
+-- never match on delete — the column it's filtering on isn't there. FULL
+-- puts every column in old-row data so deletes are actually visible.
+alter table bookings replica identity full;
 alter publication supabase_realtime add table bookings;
 
 -- 10. Ghost-slot reaper (Part 9) — NOT YET APPLIED -------------
@@ -311,3 +338,183 @@ begin
 end $$;
 
 grant execute on function public.claim_offer(timestamptz, timestamptz) to authenticated;
+
+-- 12. Release cutoff: no cancel/reschedule within 10 min of start -----
+-- Applies to any DELETE of a user's own booking — the manual "Release"
+-- button, and the release_slot_start delete inside claim_offer() (a
+-- reschedule is just a release-then-book, so it gets the same cutoff as a
+-- plain release). Does NOT apply to the ghost reaper (section 10): that
+-- runs as a background cron job with no request context, so auth.uid() is
+-- null there — and its deletes are always for slots already well past
+-- start anyway, which this cutoff isn't meant to police.
+create or replace function public.enforce_release_cutoff()
+returns trigger language plpgsql as $$
+begin
+  if auth.uid() is not null and old.slot_start < now() + interval '10 minutes' then
+    raise exception 'Too late to release — this slot starts in under 10 minutes.';
+  end if;
+  return old;
+end $$;
+
+create trigger release_cutoff before delete on bookings
+for each row execute function public.enforce_release_cutoff();
+
+-- 13. Waitlist UI support: decline + queue position ---------------
+-- decline_offer(): the "No thanks" action. Marks the caller's own active
+-- offer declined, drops their watcher row (declining means leaving the
+-- queue, not staying on it), and cascades immediately via
+-- create_next_offer() rather than waiting for cron to notice the expiry.
+create or replace function public.decline_offer(target_slot_start timestamptz)
+returns void language plpgsql
+security definer set search_path = public as $$
+declare caller uuid := auth.uid();
+begin
+  update slot_offers
+     set outcome = 'declined'
+   where slot_start = target_slot_start
+     and user_id = caller
+     and outcome is null
+     and expires_at > now();
+
+  if not found then
+    raise exception 'You do not have an active offer for this slot.';
+  end if;
+
+  delete from slot_watchers
+   where slot_start = target_slot_start
+     and user_id = caller;
+
+  perform public.create_next_offer(target_slot_start);
+end $$;
+
+grant execute on function public.decline_offer(timestamptz) to authenticated;
+
+-- my_watched_slots(): position is 1-based, derived from slot_watchers.
+-- created_at order (section 11d's reasoning — no position column, nothing
+-- to renumber). slot_watchers' RLS only lets a user see their own rows,
+-- which is right for everything except this: computing a position needs to
+-- compare against everyone else's created_at for the same slot. security
+-- definer steps around that just for the count, and only ever returns the
+-- caller's own slot_start/position — never anyone else's identity.
+create or replace function public.my_watched_slots()
+returns table(slot_start timestamptz, "position" int)
+language sql stable security definer set search_path = public as $$
+  select mine.slot_start,
+         (select count(*)::int + 1 from slot_watchers w
+           where w.slot_start = mine.slot_start and w.created_at < mine.created_at) as "position"
+  from slot_watchers mine
+  where mine.user_id = auth.uid();
+$$;
+
+grant execute on function public.my_watched_slots() to authenticated;
+
+-- Realtime for offers: the "held" banner and the offer card both need to
+-- react the instant an offer appears or resolves, same reasoning as
+-- bookings joining this publication in section 9. No REPLICA IDENTITY FULL
+-- here — unlike bookings, slot_offers rows are never deleted, only
+-- updated, and UPDATE/INSERT payloads carry full new-row data regardless
+-- of replica identity.
+--
+-- Wrapped in a guard (unlike bookings' plain ALTER PUBLICATION in section
+-- 9) because this whole file has turned out to get re-pasted into the SQL
+-- editor more than once while iterating — and a bare ALTER PUBLICATION
+-- ADD TABLE errors "already a member" on a second run, which (multi-
+-- statement pastes run as one implicit transaction) rolls back everything
+-- else in the same paste along with it.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime' and tablename = 'slot_offers'
+  ) then
+    alter publication supabase_realtime add table slot_offers;
+  end if;
+end $$;
+
+-- 14. Advance the queue synchronously on release ------------------
+-- create_next_offer() was originally only invoked from the async
+-- Database Webhook -> notify-slot-freed edge function path. That leaves a
+-- real gap: between a booking's DELETE committing and that webhook round
+-- trip completing, the slot is free with no offer yet, and the person who
+-- just released it (or anyone) can book it again in that window — exactly
+-- what enforce_offer_hold (section 11b) is supposed to prevent. This
+-- trigger closes it by creating the offer in the SAME transaction as the
+-- delete, so by the time anyone else can see the slot as free,
+-- enforce_offer_hold is already in force if there's a watcher. The
+-- webhook-driven edge function still exists, but now only sends the
+-- email — it doesn't create the offer anymore (see notify-slot-freed).
+--
+-- Fires for every bookings delete uniformly, same as the release cutoff
+-- (section 12): a manual release, the release_slot_start swap inside
+-- claim_offer(), and eventually the ghost reaper — the last of those is
+-- always for an already-started slot, which create_next_offer()'s own
+-- 45-minutes-out check turns into a no-op, so it doesn't need excluding
+-- here either.
+create or replace function public.advance_queue_on_release()
+returns trigger language plpgsql
+security definer set search_path = public as $$
+begin
+  perform public.create_next_offer(old.slot_start);
+  return old;
+end $$;
+
+-- drop-then-create rather than a bare CREATE TRIGGER: same re-paste
+-- reasoning as the publication guard above — CREATE TRIGGER has no OR
+-- REPLACE form, so a second run of this file errors "already exists" and
+-- takes the rest of that paste down with it.
+drop trigger if exists advance_queue_after_release on bookings;
+create trigger advance_queue_after_release after delete on bookings
+for each row execute function public.advance_queue_on_release();
+
+-- 15. Admin: manage residents, is_admin flag ------------------
+-- No self-service admin promotion UI — for a ~50-resident hostel, flipping
+-- this by hand in the SQL editor for whoever needs it is simpler and safer
+-- than building role-management UI for something that happens rarely.
+alter table profiles add column if not exists is_admin boolean not null default false;
+
+-- residents keeps RLS with zero policies for everyone except admins (see
+-- section 8's "invisible to clients" comment) — these add exactly one
+-- carve-out: an admin (checked via profiles.is_admin) can read and write
+-- the allowlist. Non-admins are unaffected, still zero access.
+create policy "admins manage residents" on residents for all to authenticated
+  using (exists (select 1 from profiles where id = auth.uid() and is_admin))
+  with check (exists (select 1 from profiles where id = auth.uid() and is_admin));
+
+-- Admins can also update *other* residents' profiles (full_name, room_no)
+-- — needed so editing a resident's room number in the admin UI can also
+-- correct it for someone who already signed up, not just the residents
+-- row. profiles already has an unconditional "read all profiles" select
+-- policy, so the is_admin subquery below doesn't hit an RLS chicken-and-
+-- egg problem reading itself.
+create policy "admins update any profile" on profiles for update to authenticated
+  using (exists (select 1 from profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from profiles p where p.id = auth.uid() and p.is_admin));
+
+-- FK so PostgREST can embed profiles(...) on slot_offers the same way
+-- section 4b already does for bookings — slot_offers.user_id only
+-- references auth.users, which isn't enough for PostgREST to auto-detect
+-- the join to profiles for the admin slots overview.
+alter table slot_offers
+  add constraint slot_offers_user_id_profiles_fkey
+  foreign key (user_id) references profiles(id) on delete cascade;
+
+-- admin_slot_watchers(): the master slots view needs to show who's
+-- waiting on each slot, but slot_watchers' RLS only exposes a user's own
+-- rows (same problem my_watched_slots, section 13, worked around) — this
+-- is the admin equivalent, one call for a whole day's worth of slots at
+-- once instead of one call per slot. Silently returns nothing for a
+-- non-admin caller rather than raising — this is a read path, not a
+-- mutation, so a quiet empty result is enough; it's also never reachable
+-- except from admin-gated UI.
+create or replace function public.admin_slot_watchers(target_slot_starts timestamptz[])
+returns table(slot_start timestamptz, user_id uuid, full_name text, room_no text, created_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select w.slot_start, w.user_id, p.full_name, p.room_no, w.created_at
+  from slot_watchers w
+  join profiles p on p.id = w.user_id
+  where w.slot_start = any(target_slot_starts)
+    and exists (select 1 from profiles me where me.id = auth.uid() and me.is_admin)
+  order by w.slot_start, w.created_at;
+$$;
+
+grant execute on function public.admin_slot_watchers(timestamptz[]) to authenticated;
