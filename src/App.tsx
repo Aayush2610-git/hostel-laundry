@@ -26,10 +26,12 @@ function App() {
 
   // This is a phone app. On a wide viewport it renders as a phone-shaped
   // column centered on the page — not stretched edge to edge — with a
-  // distinct backdrop behind it so the "device" reads as contained. A fixed
-  // (not minimum) height matters: it's what lets HomeScreen's slot list
-  // scroll *inside* the column while the header/hero/bottom bar stay put,
-  // instead of the whole page scrolling.
+  // distinct backdrop behind it so the "device" reads as contained.
+  // min-h-dvh (not a fixed h-dvh) + no overflow-hidden here on purpose: the
+  // status hero used to sit pinned at a fixed height with only the slot
+  // list scrolling inside it, which ate too much of a phone screen with a
+  // graphic nobody was scrolling past to get to the actual booking grid.
+  // Now the whole column scrolls together like a normal page.
   // Admin gets its own full-width, naturally-scrolling layout — outside the
   // phone-frame column entirely, not squeezed into it — since it's a
   // laptop tool (a table you edit, a day's grid you scan), not a pocket
@@ -44,8 +46,8 @@ function App() {
   }
 
   return (
-    <div className="h-dvh bg-black">
-      <div className="mx-auto flex h-dvh w-full max-w-[440px] flex-col overflow-hidden bg-bg text-text-primary">
+    <div className="min-h-dvh bg-black">
+      <div className="mx-auto flex min-h-dvh w-full max-w-[440px] flex-col bg-bg text-text-primary">
         {session === 'loading' ? (
           <div className="flex flex-1 items-center justify-center text-text-secondary">Loading…</div>
         ) : session ? (

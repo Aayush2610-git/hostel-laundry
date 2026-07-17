@@ -68,23 +68,13 @@ function formatHM(hour: number, minute: number): { h: number; m: number; ampm: '
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
-// The 30-minute booking window, e.g. "7:00 – 7:30 AM" — NOT the slot's full
-// 2.5h occupancy. The slot still reserves the whole 2.5h block server-side;
-// this is just what's shown, since the full range was noise for what's
-// really a "show up by this window" instruction.
-export function formatSlotRange(hour: number, minute: number): string {
-  const endTotalMinutes = hour * 60 + minute + 30
-  const endHour = Math.floor(endTotalMinutes / 60) % 24
-  const endMinute = endTotalMinutes % 60
-  const start = formatHM(hour, minute)
-  const end = formatHM(endHour, endMinute)
-  return start.ampm === end.ampm
-    ? `${start.h}:${pad2(start.m)} – ${end.h}:${pad2(end.m)} ${end.ampm}`
-    : `${start.h}:${pad2(start.m)} ${start.ampm} – ${end.h}:${pad2(end.m)} ${end.ampm}`
-}
-
-// e.g. "9:30 PM" — just the start time, for the release-confirm prompt
-// ("Release your 9:30 PM slot?"), where a range would be noise.
+// e.g. "9:30 PM" — just the start time. A "7:00 – 7:30 AM" range used to be
+// shown here, but that reads as "the machine only runs half an hour" —
+// wrong, it reserves the full 2.5h block (SLOT_DURATION_MS) server-side.
+// The start time is the only thing anyone actually acts on; when it stops
+// being free is formatSlotEnd's job below, kept as an explicitly separate
+// "Done by" / "Free again" line rather than folded into one string, so the
+// two numbers can't be mistaken for a single half-hour window.
 export function formatSlotStart(hour: number, minute: number): string {
   const { h, m, ampm } = formatHM(hour, minute)
   return `${h}:${pad2(m)} ${ampm}`
@@ -100,6 +90,15 @@ export function istHourOf(utcMs: number): number {
 // The IST minute-of-hour (0-59) that a raw slot_start timestamp falls on.
 export function istMinuteOf(utcMs: number): number {
   return Math.floor(((utcMs + IST_OFFSET_MS) % HOUR_MS) / MINUTE_MS)
+}
+
+// "Done by" / "Free again" — always derived from SLOT_DURATION_MS, the same
+// number the actual occupancy is built from, never a separate hardcoded
+// offset. Takes a raw slot_start timestamp (not hour/minute) since every
+// call site already has that, not a SLOT_TIMES entry.
+export function formatSlotEnd(startMs: number): string {
+  const endMs = startMs + SLOT_DURATION_MS
+  return formatSlotStart(istHourOf(endMs), istMinuteOf(endMs))
 }
 
 // Inverse of slotStartUtcMs: given a slot's raw timestamp and its IST hour,

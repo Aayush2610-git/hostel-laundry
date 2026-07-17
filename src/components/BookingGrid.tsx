@@ -8,7 +8,7 @@ import {
   currentAnchorDayIndex,
   formatFullDate,
   formatPillLabel,
-  formatSlotRange,
+  formatSlotEnd,
   formatSlotStart,
   isLateNight,
   istHourOf,
@@ -341,10 +341,10 @@ export function BookingGrid({
   const pillDayIndices = [0, 1, 2, 3].map((offset) => anchorDayIndex + offset)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex flex-col">
       <div className="shrink-0 px-5 pt-5 pb-3">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-heading font-bold text-text-primary">Available Slots</h2>
+          <h2 className="text-heading font-bold text-text-primary">Book a slot</h2>
           <span className="text-sm text-text-secondary">{formatFullDate(selectedDayIndex)}</span>
         </div>
       </div>
@@ -364,7 +364,7 @@ export function BookingGrid({
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+      <div className="px-5 py-3">
         {error && (
           <p className="pop-in mb-3 rounded-card bg-danger-soft px-4 py-3 text-sm text-danger">{error}</p>
         )}
@@ -429,6 +429,7 @@ export function BookingGrid({
                   <SlotRow
                     hour={hour}
                     minute={minute}
+                    startMs={startMs}
                     state={state}
                     highlighted={startMs === pulsingStartMs}
                     onTap={() => {
@@ -476,17 +477,24 @@ export function BookingGrid({
 function SlotRow({
   hour,
   minute,
+  startMs,
   state,
   highlighted,
   onTap,
 }: {
   hour: number
   minute: number
+  startMs: number
   state: SlotState
   highlighted: boolean
   onTap: () => void
 }) {
-  const label = formatSlotRange(hour, minute)
+  // Start time only, never a range — "7:00 – 7:30 AM" read as "the machine
+  // only runs half an hour." "Load your clothes" (FREE) and "Free again" /
+  // "Done by" (TAKEN/YOURS) are what actually communicate the real 2.5h
+  // occupancy, computed from formatSlotEnd (SLOT_DURATION_MS), never a
+  // second hardcoded time.
+  const startLabel = formatSlotStart(hour, minute)
   const lateNight = isLateNight(hour)
   // HELD is never tappable, even when it's held for me — claiming happens
   // through the offer card at the top of home (not this row), so the
@@ -510,16 +518,27 @@ function SlotRow({
     >
       <div>
         <p className={`text-base font-medium ${state.kind === 'PAST' ? 'text-text-secondary' : 'text-text-primary'}`}>
-          {label}
+          {startLabel}
+          {state.kind === 'FREE' && (
+            <span className="ml-2 text-xs font-normal text-text-secondary">Load your clothes</span>
+          )}
           {lateNight && <span className="ml-2 text-xs text-text-secondary">(late night)</span>}
         </p>
+        {state.kind === 'FREE' && (
+          <p className="text-sm text-text-secondary">Done by {formatSlotEnd(startMs)}</p>
+        )}
         {state.kind === 'TAKEN' && (
-          <p className="text-sm text-text-secondary">
-            {state.name} · Room {state.room}
-            {state.position !== null && (
-              <span className="text-accent"> · You're {ordinal(state.position)} in line</span>
-            )}
-          </p>
+          <>
+            <p className="text-sm text-text-secondary">
+              {state.name} · Room {state.room}
+            </p>
+            <p className="text-sm text-text-secondary">
+              Free again {formatSlotEnd(startMs)}
+              {state.position !== null && (
+                <span className="text-accent"> · You're {ordinal(state.position)} in line</span>
+              )}
+            </p>
+          </>
         )}
         {state.kind === 'HELD' && (
           <p className="text-sm text-text-secondary">
@@ -528,15 +547,19 @@ function SlotRow({
               : `Held for someone until ${formatSlotStart(istHourOf(state.expiresAt), istMinuteOf(state.expiresAt))}`}
           </p>
         )}
-        {state.kind === 'YOURS' &&
-          (state.releasable ? (
-            <p className="flex items-center gap-1.5 text-sm text-accent">
-              <EjectIcon className="h-3.5 w-3.5" />
-              Tap to release
-            </p>
-          ) : (
-            <p className="text-sm text-text-secondary">Locked in — starts soon</p>
-          ))}
+        {state.kind === 'YOURS' && (
+          <>
+            <p className="text-sm text-text-secondary">Done by {formatSlotEnd(startMs)}</p>
+            {state.releasable ? (
+              <p className="flex items-center gap-1.5 text-sm text-accent">
+                <EjectIcon className="h-3.5 w-3.5" />
+                Tap to release
+              </p>
+            ) : (
+              <p className="text-sm text-text-secondary">Locked in — starts soon</p>
+            )}
+          </>
+        )}
       </div>
 
       {state.kind === 'FREE' && (

@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { useNextFreeSlot } from '../lib/useNextFreeSlot'
-import { currentAnchorDayIndex, formatPillLabel, formatSlotRange } from '../lib/laundryDay'
+import { currentAnchorDayIndex, formatPillLabel, formatSlotStart } from '../lib/laundryDay'
 
 // Glass sticky bar: always-visible shortcut to the earliest free slot, so
 // finding one doesn't require scrolling the grid. It used to book that
@@ -19,7 +19,7 @@ export function NextFreeSlotBar({
   onNavigate: (dayIndex: number, startMs: number) => void
 }) {
   const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
-  const next = useNextFreeSlot(session)
+  const { next } = useNextFreeSlot(session)
 
   if (!next) return null
 
@@ -29,7 +29,7 @@ export function NextFreeSlotBar({
         <div>
           <p className="text-eyebrow font-medium tracking-wide text-text-secondary uppercase">Next free slot</p>
           <p className="text-base font-semibold text-text-primary">
-            {formatPillLabel(next.dayIndex, anchorDayIndex)} · {formatSlotRange(next.hour, next.minute)}
+            {formatPillLabel(next.dayIndex, anchorDayIndex)} · {formatSlotStart(next.hour, next.minute)}
           </p>
         </div>
         <button

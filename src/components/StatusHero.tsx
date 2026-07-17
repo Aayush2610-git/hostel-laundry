@@ -1,6 +1,7 @@
 import type { Session } from '@supabase/supabase-js'
 import { useCurrentBooking } from '../lib/useCurrentBooking'
-import { SLOT_DURATION_MS } from '../lib/laundryDay'
+import { useNextBookedSlot } from '../lib/useNextBookedSlot'
+import { SLOT_DURATION_MS, formatSlotStart, istHourOf, istMinuteOf } from '../lib/laundryDay'
 
 const RING_RADIUS = 88
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
@@ -17,6 +18,7 @@ function formatCountdown(ms: number): string {
 
 export function StatusHero({ session }: { session: Session }) {
   const { isRunning, booking, remainingMs } = useCurrentBooking()
+  const nextBookedMs = useNextBookedSlot()
 
   const remainingFraction = isRunning ? Math.min(1, Math.max(0, remainingMs / SLOT_DURATION_MS)) : 0
   const dashOffset = RING_CIRCUMFERENCE * (1 - remainingFraction)
@@ -28,8 +30,13 @@ export function StatusHero({ session }: { session: Session }) {
     : null
 
   return (
-    <div className="flex shrink-0 flex-col items-center gap-4 border-b border-border bg-bg px-5 py-8">
-      <div className="relative aspect-square w-[min(62vw,208px)]">
+    <div className="flex shrink-0 flex-row items-center gap-4 border-b border-border bg-bg px-5 py-4">
+      {/* Shrunk from a mobile-screen-dominating 208px down to this — it was
+          eating too much vertical space on a phone for what's a secondary
+          status readout, not the primary thing anyone's here to act on
+          (that's the grid below). Row layout (not stacked) for the same
+          reason: keeps this a compact strip, not a full-width block. */}
+      <div className="relative aspect-square w-[min(24vw,88px)] shrink-0">
         {/* Outer bezel — the porthole rim, always visible, static structure. */}
         <div className="absolute inset-0 rounded-full border border-border bg-surface shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)]" />
 
@@ -57,7 +64,7 @@ export function StatusHero({ session }: { session: Session }) {
 
         {/* Drum face — only this layer spins, never the readout on top of it. */}
         <div
-          className={`absolute inset-[18px] overflow-hidden rounded-full border border-border bg-surface-elevated shadow-[inset_0_3px_12px_rgba(0,0,0,0.55)] ${isRunning ? 'drum-spin' : ''}`}
+          className={`absolute inset-[8px] overflow-hidden rounded-full border border-border bg-surface-elevated shadow-[inset_0_3px_12px_rgba(0,0,0,0.55)] ${isRunning ? 'drum-spin' : ''}`}
         >
           <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full opacity-30">
             <line x1="50" y1="6" x2="50" y2="94" stroke="var(--color-border)" strokeWidth="1.5" />
@@ -67,28 +74,27 @@ export function StatusHero({ session }: { session: Session }) {
             <circle cx="50" cy="50" r="20" fill="none" stroke="var(--color-border)" strokeWidth="1" />
           </svg>
         </div>
-
-        {/* Center readout, absolutely positioned as a sibling so it stays upright while the drum behind it rotates. */}
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-1 rounded-card border border-border bg-surface px-5 py-3">
-            <span className="text-eyebrow font-medium tracking-wide text-text-secondary uppercase">
-              Time left
-            </span>
-            <span className="font-mono text-hero font-semibold text-text-primary tabular-nums">
-              {isRunning ? formatCountdown(remainingMs) : '—:—'}
-            </span>
-          </div>
-        </div>
       </div>
 
-      <div className="flex flex-col items-center gap-1 text-center">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span
           className={`flex items-center gap-2 text-sm font-medium ${isRunning ? 'text-accent' : 'text-text-secondary'}`}
         >
-          <span className={`h-2 w-2 rounded-full ${isRunning ? 'bg-accent animate-pulse' : 'bg-text-secondary'}`} />
+          <span className={`h-2 w-2 shrink-0 rounded-full ${isRunning ? 'bg-accent animate-pulse' : 'bg-text-secondary'}`} />
           {isRunning ? 'Currently washing' : 'Free now'}
+          {isRunning && who && <span className="text-text-secondary">· {who}</span>}
         </span>
-        {isRunning && who && <span className="text-sm text-text-secondary">{who}</span>}
+        {/* No empty "TIME LEFT –:–" placeholder when idle — that read as
+            broken, not free. Idle shows when the machine's next claimed
+            instead (still useful — that's the actual question), and omits
+            this line entirely if there's nothing booked at all to show. */}
+        {(isRunning || nextBookedMs !== null) && (
+          <span className="font-mono text-lg font-semibold text-text-primary tabular-nums">
+            {isRunning
+              ? formatCountdown(remainingMs)
+              : nextBookedMs !== null && `Next: ${formatSlotStart(istHourOf(nextBookedMs), istMinuteOf(nextBookedMs))}`}
+          </span>
+        )}
       </div>
     </div>
   )

@@ -5,7 +5,6 @@ import {
   currentAnchorDayIndex,
   formatFullDate,
   formatPillLabel,
-  formatSlotRange,
   formatSlotStart,
   isLateNight,
   istHourOf,
@@ -95,7 +94,7 @@ export function AdminSlotsOverview() {
                 return (
                   <tr key={`${hour}-${minute}`} className="border-b border-border last:border-0">
                     <td className="px-4 py-2.5 text-text-primary">
-                      {formatSlotRange(hour, minute)}
+                      {formatSlotStart(hour, minute)}
                       {isLateNight(hour) && <span className="ml-1.5 text-xs text-text-secondary">(late night)</span>}
                     </td>
                     <td className="px-4 py-2.5">

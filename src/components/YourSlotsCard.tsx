@@ -5,7 +5,6 @@ import { useMyUpcomingBookings } from '../lib/useMyUpcomingBookings'
 import {
   currentAnchorDayIndex,
   formatPillLabel,
-  formatSlotRange,
   formatSlotStart,
   istHourOf,
   istMinuteOf,
@@ -104,7 +103,7 @@ export function YourSlotsCard({ session }: { session: Session }) {
                   className="flex w-full items-center justify-between rounded-card bg-text-primary px-4 py-3.5 text-left transition-transform active:scale-[0.98]"
                 >
                   <p className="text-base font-semibold text-bg">
-                    {dayLabel} · {formatSlotRange(hour, minute)}
+                    {dayLabel} · {formatSlotStart(hour, minute)}
                   </p>
                   {releasable ? (
                     <span className="flex items-center gap-1.5 text-sm font-medium text-accent">

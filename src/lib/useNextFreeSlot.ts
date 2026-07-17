@@ -12,10 +12,11 @@ import {
 
 export type NextFreeSlot = { startMs: number; hour: number; minute: number; dayIndex: number }
 
-// Powers the sticky bottom bar: the earliest free slot across the same
-// 4-day window the day pills expose, skipping any day the user already has
-// a booking on (the trigger would reject a second one there anyway).
-export function useNextFreeSlot(session: Session): NextFreeSlot | null {
+// Powers the sticky bottom bar (and HomeScreen's auto-jump-to-it on load):
+// the earliest free slot across the same 4-day window the day pills
+// expose, skipping any day the user already has a booking on (the trigger
+// would reject a second one there anyway).
+export function useNextFreeSlot(session: Session): { next: NextFreeSlot | null; loading: boolean } {
   const anchorDayIndex = useMemo(() => currentAnchorDayIndex(), [])
   const { bookings: myUpcomingBookings } = useMyUpcomingBookings(session)
 
@@ -43,11 +44,20 @@ export function useNextFreeSlot(session: Session): NextFreeSlot | null {
   }, [anchorDayIndex, myBookedDayIndices])
 
   const [takenStartMs, setTakenStartMs] = useState<Set<number>>(new Set())
+  // Starts true and flips false once, the first time this candidate set's
+  // taken-slots fetch actually lands — before that, takenStartMs is an
+  // empty Set, so `next` below would silently report the first
+  // chronological candidate as free even if it's actually taken.
+  // HomeScreen's auto-navigate-on-load needs to know not to trust that
+  // premature value; NextFreeSlotBar doesn't currently need it, but it's
+  // cheap to expose either way.
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     if (candidates.length === 0) {
       setTakenStartMs(new Set())
+      setLoading(false)
       return
     }
 
@@ -61,6 +71,7 @@ export function useNextFreeSlot(session: Session): NextFreeSlot | null {
         .then(({ data, error }) => {
           if (cancelled) return
           if (!error) setTakenStartMs(new Set(data.map((b) => new Date(b.slot_start).getTime())))
+          setLoading(false)
         })
     }
 
@@ -79,5 +90,5 @@ export function useNextFreeSlot(session: Session): NextFreeSlot | null {
     }
   }, [candidates])
 
-  return candidates.find((c) => !takenStartMs.has(c.startMs)) ?? null
+  return { next: candidates.find((c) => !takenStartMs.has(c.startMs)) ?? null, loading }
 }

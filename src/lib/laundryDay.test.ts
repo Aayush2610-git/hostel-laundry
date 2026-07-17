@@ -3,7 +3,7 @@ import {
   SLOT_TIMES,
   currentAnchorDayIndex,
   formatPillLabel,
-  formatSlotRange,
+  formatSlotEnd,
   formatSlotStart,
   istHourOf,
   istMinuteOf,
@@ -86,21 +86,26 @@ describe('formatSlotStart', () => {
   })
 })
 
-describe('formatSlotRange renders the 30-minute booking window for every slot', () => {
+describe('formatSlotEnd derives "done by" from SLOT_DURATION_MS, not a hardcoded offset', () => {
+  const anchor = currentAnchorDayIndex(new Date('2026-07-16T12:00:00+05:30').getTime())
+  // Each slot's end is the next slot's start (they're back-to-back — see
+  // the "no gaps" describe block below); the last slot's end is 03:00 IST,
+  // the laundry day boundary itself.
   const expected: Record<string, string> = {
-    '7-0': '7:00 – 7:30 AM',
-    '9-30': '9:30 – 10:00 AM',
-    '12-0': '12:00 – 12:30 PM',
-    '14-30': '2:30 – 3:00 PM',
-    '17-0': '5:00 – 5:30 PM',
-    '19-30': '7:30 – 8:00 PM',
-    '22-0': '10:00 – 10:30 PM',
-    '0-30': '12:30 – 1:00 AM',
+    '7-0': '9:30 AM',
+    '9-30': '12:00 PM',
+    '12-0': '2:30 PM',
+    '14-30': '5:00 PM',
+    '17-0': '7:30 PM',
+    '19-30': '10:00 PM',
+    '22-0': '12:30 AM',
+    '0-30': '3:00 AM',
   }
 
   for (const slot of SLOT_TIMES) {
-    it(`renders ${slot.hour}:${slot.minute}`, () => {
-      expect(formatSlotRange(slot.hour, slot.minute)).toBe(expected[`${slot.hour}-${slot.minute}`])
+    it(`renders the end of ${slot.hour}:${slot.minute}`, () => {
+      const startMs = slotStartUtcMs(anchor, slot.hour, slot.minute)
+      expect(formatSlotEnd(startMs)).toBe(expected[`${slot.hour}-${slot.minute}`])
     })
   }
 })

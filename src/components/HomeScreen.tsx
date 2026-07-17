@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { useMyProfile } from '../lib/useMyProfile'
+import { useNextFreeSlot } from '../lib/useNextFreeSlot'
 import { currentAnchorDayIndex } from '../lib/laundryDay'
 import { BookingGrid, type SlotHighlight } from './BookingGrid'
 import { NextFreeSlotBar } from './NextFreeSlotBar'
@@ -25,8 +26,28 @@ export function HomeScreen({ session, onOpenAdmin }: { session: Session; onOpenA
     setHighlight({ startMs })
   }
 
+  // Land straight on the nearest genuinely free slot instead of wherever
+  // "today" happens to start (which could be several taken/past rows
+  // before the first bookable one). Fires once, the first time useNextFreeSlot
+  // resolves a value — guarded so it doesn't keep yanking the scroll
+  // position later if the "next free slot" changes while someone's already
+  // browsing (e.g. it gets booked out from under them).
+  const { next: nextFree, loading: nextFreeLoading } = useNextFreeSlot(session)
+  const hasAutoNavigated = useRef(false)
+  useEffect(() => {
+    // Waits for loading to clear rather than firing on the first non-null
+    // value: useNextFreeSlot briefly reports the chronologically-first
+    // candidate as "free" before its taken-slots fetch has actually
+    // landed, since an empty Set makes everything look free — jumping
+    // there and locking the ref before that settles could land on an
+    // already-taken slot and never self-correct.
+    if (hasAutoNavigated.current || nextFreeLoading || !nextFree) return
+    hasAutoNavigated.current = true
+    goToSlot(nextFree.dayIndex, nextFree.startMs)
+  }, [nextFree, nextFreeLoading])
+
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="flex flex-1 flex-col">
       <header className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3">
         <span className="text-sm text-text-secondary">
           {profile ? `${profile.full_name} · Room ${profile.room_no}` : ' '}
