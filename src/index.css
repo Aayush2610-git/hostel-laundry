@@ -93,6 +93,23 @@ body {
   animation: highlight-fade 2.2s ease-out forwards;
 }
 
+/* AuthScreen's decorative soap bubbles — a slow, gentle drift so the sign-in
+   screen doesn't feel static. Purely cosmetic (aria-hidden'd bubbles), so it
+   gets the same reduced-motion off-switch as everything else here. */
+@keyframes bubble-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-14px) scale(1.05);
+  }
+}
+
+.bubble-float {
+  animation: bubble-float 6s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pop-in {
     animation: none;
@@ -101,6 +118,10 @@ body {
   .slot-highlight {
     animation: none;
     box-shadow: 0 0 0 3px var(--color-accent);
+  }
+
+  .bubble-float {
+    animation: none;
   }
 
   /* Tailwind's built-in animate-pulse (the "live" status dot) — same

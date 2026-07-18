@@ -404,6 +404,12 @@ grant execute on function public.decline_offer(timestamptz) to authenticated;
 -- compare against everyone else's created_at for the same slot. security
 -- definer steps around that just for the count, and only ever returns the
 -- caller's own slot_start/position — never anyone else's identity.
+--
+-- Filters to slot_start > now(): without it, a watcher row for a slot that
+-- passed without ever freeing up (nothing currently cleans those up — no
+-- ghost-reaper equivalent for watchers) would sit here forever, both as
+-- UI noise and as a silent, permanent bite out of watcher_cap() (section
+-- 16) below, since that trigger counts rows returned by the same filter.
 create or replace function public.my_watched_slots()
 returns table(slot_start timestamptz, "position" int)
 language sql stable security definer set search_path = public as $$
@@ -411,7 +417,8 @@ language sql stable security definer set search_path = public as $$
          (select count(*)::int + 1 from slot_watchers w
            where w.slot_start = mine.slot_start and w.created_at < mine.created_at) as "position"
   from slot_watchers mine
-  where mine.user_id = auth.uid();
+  where mine.user_id = auth.uid()
+    and mine.slot_start > now();
 $$;
 
 grant execute on function public.my_watched_slots() to authenticated;
@@ -526,3 +533,31 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 grant execute on function public.admin_slot_watchers(timestamptz[]) to authenticated;
+
+-- 16. Watcher cap: at most watcher_cap() slots in a waitlist at once ----
+-- Same single-source-of-truth pattern as booking_spacing_days() (section
+-- 6) — never hardcode the number. Counts only slot_start > now(), same
+-- reasoning as my_watched_slots() above: a stale watcher row on a slot
+-- that already passed shouldn't permanently eat into the cap.
+create or replace function public.watcher_cap()
+returns int language sql immutable as $$
+  select 4;
+$$;
+
+grant execute on function public.watcher_cap() to authenticated;
+
+create or replace function public.enforce_watcher_cap()
+returns trigger language plpgsql as $$
+declare cnt int;
+begin
+  select count(*) into cnt from slot_watchers
+   where user_id = new.user_id
+     and slot_start > now();
+  if cnt >= public.watcher_cap() then
+    raise exception 'You can only be waitlisted for % slots at a time — leave one first', public.watcher_cap();
+  end if;
+  return new;
+end $$;
+
+create trigger watcher_cap_check before insert on slot_watchers
+for each row execute function public.enforce_watcher_cap();

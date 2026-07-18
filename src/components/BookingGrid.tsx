@@ -33,10 +33,10 @@ type BookingRow = {
 type OfferRow = { slot_start: string; user_id: string; expires_at: string }
 
 type SlotState =
-  | { kind: 'FREE' }
+  | { kind: 'FREE'; bookable: boolean; conflictDayLabel: string | null }
   | { kind: 'HELD'; forMe: boolean; expiresAt: number }
   | { kind: 'YOURS'; releasable: boolean }
-  | { kind: 'TAKEN'; name: string; room: string; position: number | null }
+  | { kind: 'TAKEN'; name: string; room: string; position: number | null; watchable: boolean }
   | { kind: 'PAST' }
 
 // Mirrors the enforce_release_cutoff trigger's own cutoff (`old.slot_start
@@ -44,6 +44,11 @@ type SlotState =
 // the UI before the server would reject it — same reasoning as the isPast
 // mirror of enforce_booking_limits below.
 const RELEASE_CUTOFF_MS = 10 * 60 * 1000
+
+// Mirrors watcher_cap() in schema.sql section 16 — the DB trigger is what
+// actually enforces it; this is just the client-side copy, same pattern
+// as BOOKING_SPACING_DAYS.
+const WATCHER_CAP = 4
 
 // "2nd in line" — residents count in the tens, so no locale/i18n concerns.
 function ordinal(n: number): string {
@@ -396,6 +401,8 @@ export function BookingGrid({
               // deleted), so this branch and the booking branch below are
               // mutually exclusive in practice — checked in this order
               // anyway so a HELD reading wins if that invariant ever slips.
+              const position = watchedPositionByStartMs.get(startMs) ?? null
+
               const state: SlotState = isPast
                 ? { kind: 'PAST' }
                 : offer
@@ -407,9 +414,20 @@ export function BookingGrid({
                           kind: 'TAKEN',
                           name: booking.profiles?.full_name ?? 'Someone',
                           room: booking.profiles?.room_no ?? '?',
-                          position: watchedPositionByStartMs.get(startMs) ?? null,
+                          position,
+                          // Already watching this one -> always tappable (to
+                          // unwatch, uncapped). Not watching yet -> only
+                          // tappable to start if there's room in the cap.
+                          watchable: position !== null || watched.length < WATCHER_CAP,
                         }
-                      : { kind: 'FREE' }
+                      : {
+                          kind: 'FREE',
+                          bookable: !dayAtCap,
+                          conflictDayLabel:
+                            conflictingBookedDayIndex !== null
+                              ? formatPillLabel(conflictingBookedDayIndex, anchorDayIndex)
+                              : null,
+                        }
 
               const rowKey = `${hour}-${minute}`
 
@@ -442,16 +460,10 @@ export function BookingGrid({
                     highlighted={startMs === pulsingStartMs}
                     onTap={() => {
                       if (state.kind === 'FREE') {
-                        // Only surfaced reactively, on the tap that's actually
-                        // blocked by it — not as a standing banner the moment
-                        // you happen to already have a booking that day.
-                        if (dayAtCap && conflictingBookedDayIndex !== null) {
-                          showToast(
-                            `You have a booking on ${formatPillLabel(conflictingBookedDayIndex, anchorDayIndex)} — bookings must be at least ${BOOKING_SPACING_DAYS} days apart.`,
-                          )
-                        } else {
-                          bookSlot(startMs)
-                        }
+                        // bookable is already false (button disabled) when
+                        // at cap — this only ever runs when it's genuinely
+                        // bookable, no need to re-check dayAtCap here.
+                        bookSlot(startMs)
                       } else if (state.kind === 'YOURS') {
                         if (state.releasable) {
                           setPendingRelease({ startMs, status: 'confirm' })
@@ -459,7 +471,11 @@ export function BookingGrid({
                           showToast('Too late to release — this slot starts in under 10 minutes.')
                         }
                       } else if (state.kind === 'TAKEN') {
-                        toggleWatch(startMs, state.position !== null)
+                        if (state.watchable) {
+                          toggleWatch(startMs, state.position !== null)
+                        } else {
+                          showToast(`You can only be waitlisted for ${WATCHER_CAP} slots at a time — leave one first.`)
+                        }
                       }
                     }}
                   />
@@ -507,10 +523,17 @@ function SlotRow({
   // HELD is never tappable, even when it's held for me — claiming happens
   // through the offer card at the top of home (not this row), so the
   // release-cutoff swap logic that lives there doesn't need duplicating.
-  const tappable = state.kind === 'FREE' || state.kind === 'YOURS' || state.kind === 'TAKEN'
+  // A FREE slot within the 3-day spacing cap is genuinely disabled, not
+  // just reactively rejected on tap — it should read as unavailable before
+  // anyone taps it, same as PAST. TAKEN stays tappable even past the
+  // watcher cap so a toast can explain why (it's also still tappable to
+  // *unwatch* an existing one regardless of cap — see BookingGrid's
+  // watchable computation).
+  const tappable = (state.kind === 'FREE' && state.bookable) || state.kind === 'YOURS' || state.kind === 'TAKEN'
+  const freeAtCap = state.kind === 'FREE' && !state.bookable
 
   const stateStyles: Record<SlotState['kind'], string> = {
-    FREE: 'bg-surface-elevated border border-border',
+    FREE: freeAtCap ? 'bg-bg border border-border opacity-40' : 'bg-surface-elevated border border-border',
     HELD: 'bg-surface border border-border opacity-70',
     YOURS: 'bg-accent-soft border border-accent shadow-[0_0_16px_-4px_var(--color-accent)]',
     TAKEN: 'bg-surface border border-border',
@@ -525,15 +548,19 @@ function SlotRow({
       className={`flex w-full items-center justify-between rounded-card px-4 py-3.5 text-left transition-all duration-200 ${tappable ? 'active:scale-[0.98]' : ''} ${stateStyles[state.kind]} ${highlighted ? 'slot-highlight' : ''}`}
     >
       <div>
-        <p className={`text-base font-medium ${state.kind === 'PAST' ? 'text-text-secondary' : 'text-text-primary'}`}>
+        <p className={`text-base font-medium ${state.kind === 'PAST' || freeAtCap ? 'text-text-secondary' : 'text-text-primary'}`}>
           {startLabel}
-          {state.kind === 'FREE' && (
+          {state.kind === 'FREE' && !freeAtCap && (
             <span className="ml-2 text-xs font-normal text-text-secondary">Load your clothes</span>
           )}
           {lateNight && <span className="ml-2 text-xs text-text-secondary">(late night)</span>}
         </p>
         {state.kind === 'FREE' && (
-          <p className="text-sm text-text-secondary">Done by {formatSlotEnd(startMs)}</p>
+          <p className="text-sm text-text-secondary">
+            {state.bookable
+              ? `Done by ${formatSlotEnd(startMs)}`
+              : `Too close to your ${state.conflictDayLabel} booking`}
+          </p>
         )}
         {state.kind === 'TAKEN' && (
           <>
@@ -570,16 +597,20 @@ function SlotRow({
         )}
       </div>
 
-      {state.kind === 'FREE' && (
+      {state.kind === 'FREE' && !freeAtCap && (
         <span className="flex items-center gap-1.5 text-sm font-medium text-accent">
           <PlusIcon className="h-3.5 w-3.5" />
           Book
         </span>
       )}
       {state.kind === 'TAKEN' && (
-        <span className={`flex items-center gap-1.5 text-sm font-medium ${state.position !== null ? 'text-accent' : 'text-text-secondary'}`}>
+        <span
+          className={`flex items-center gap-1.5 text-sm font-medium ${
+            state.position !== null ? 'text-accent' : state.watchable ? 'text-text-secondary' : 'text-text-secondary opacity-50'
+          }`}
+        >
           <BellIcon className="h-4 w-4" filled={state.position !== null} />
-          {state.position === null ? 'Want this slot' : 'Watching'}
+          {state.position !== null ? 'Watching' : state.watchable ? 'Want this slot' : 'Waitlist full'}
         </span>
       )}
     </button>
